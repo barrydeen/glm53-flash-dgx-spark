@@ -1,0 +1,31 @@
+FROM glm53:sm121-v8
+
+ARG VLLM=/usr/local/lib/python3.12/dist-packages/vllm
+
+# Port of upstream vLLM PR #52816 ("[Spec Decode] DFlash2: local convolution +
+# candidate selector", merged 2026-08-21, b389ac294) onto our own verified
+# glm53:sm121-v8 image. qwen3_dflash2.py and dflash2/__init__.py are
+# byte-identical to the merged PR (diffed directly against
+# github.com/vllm-project/vllm at commit b389ac294); dflash2/speculator.py
+# has exactly one adaptation (a local gumbel_noised_argmax copy, since this
+# image's gumbel.py predates the PR's refactor) -- also diff-verified.
+COPY qwen3_dflash2.py $VLLM/model_executor/models/qwen3_dflash2.py
+COPY dflash2/ $VLLM/v1/worker/gpu/spec_decode/dflash2/
+COPY patch_registry_and_select.py /tmp/patch_registry_and_select.py
+RUN python3 /tmp/patch_registry_and_select.py && rm /tmp/patch_registry_and_select.py
+
+# GLM-5.3-specific glue (not part of PR #52816, which only adds the DRAFT
+# side): wires Glm5NextModel/Glm5NextForConditionalGeneration up to vLLM's
+# existing EagleModelMixin/SupportsEagle3 interfaces so the TARGET model can
+# feed aux hidden states to the DFlash2 drafter, mirroring the real,
+# confirmed-present aux-capture pattern in deepseek_v4/nvidia/model.py.
+COPY patch_glm_aux_capture.py /tmp/patch_glm_aux_capture.py
+RUN python3 /tmp/patch_glm_aux_capture.py && rm /tmp/patch_glm_aux_capture.py
+
+# Teaches the GLM-5-Next fast KV-cache-layout path about the DFlash2
+# drafter's SlidingWindowSpec layers (partitioned into their own group,
+# either slot-sharing the MLA tensors exact-fit or falling back to
+# standalone per-layer tensors) so the model doesn't drop to the generic
+# uniform-page path, which cannot serve GLM-5.3's kpool tail layout at all.
+COPY patch_glm5_drafter_group.py /tmp/patch_glm5_drafter_group.py
+RUN python3 /tmp/patch_glm5_drafter_group.py && rm /tmp/patch_glm5_drafter_group.py

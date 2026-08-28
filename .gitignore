@@ -1,0 +1,10 @@
+# Never commit site-specific secrets or env files
+.env
+.env.*
+*.key
+*.pem
+
+# Model weights and images live outside the repo
+*.safetensors
+*.tar
+*.log
